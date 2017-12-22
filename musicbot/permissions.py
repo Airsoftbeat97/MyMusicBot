@@ -1,184 +1,110 @@
-import shutil
-import logging
-import traceback
-import configparser
-
-import discord
-
-log = logging.getLogger(__name__)
-
-
-class PermissionsDefaults:
-    perms_file = 'config/permissions.ini'
-
-    CommandWhiteList = set()
-    CommandBlackList = set()
-    IgnoreNonVoice = set()
-    GrantToRoles = set()
-    UserList = set()
-
-    MaxSongs = 0
-    MaxSongLength = 0
-    MaxPlaylistLength = 0
-
-    AllowPlaylists = True
-    InstaSkip = False
-
-
-class Permissions:
-    def __init__(self, config_file, grant_all=None):
-        self.config_file = config_file
-        self.config = configparser.ConfigParser(interpolation=None)
-
-        if not self.config.read(config_file, encoding='utf-8'):
-            log.info("Permissions file not found, copying example_permissions.ini")
-
-            try:
-                shutil.copy('config/example_permissions.ini', config_file)
-                self.config.read(config_file, encoding='utf-8')
-
-            except Exception as e:
-                traceback.print_exc()
-                raise RuntimeError("Unable to copy config/example_permissions.ini to {}: {}".format(config_file, e))
-
-        self.default_group = PermissionGroup('Default', self.config['Default'])
-        self.groups = set()
-
-        for section in self.config.sections():
-            self.groups.add(PermissionGroup(section, self.config[section]))
-
-        # Create a fake section to fallback onto the permissive default values to grant to the owner
-        # noinspection PyTypeChecker
-        owner_group = PermissionGroup("Owner (auto)", configparser.SectionProxy(self.config, None))
-        if hasattr(grant_all, '__iter__'):
-            owner_group.user_list = set(grant_all)
-
-        self.groups.add(owner_group)
-
-    async def async_validate(self, bot):
-        log.debug("Validating permissions...")
-
-        og = discord.utils.get(self.groups, name="Owner (auto)")
-        if 'auto' in og.user_list:
-            log.debug("Fixing automatic owner group")
-            og.user_list = {bot.config.owner_id}
-
-    def save(self):
-        with open(self.config_file, 'w') as f:
-            self.config.write(f)
-
-    def for_user(self, user):
-        """
-        Returns the first PermissionGroup a user belongs to
-        :param user: A discord User or Member object
-        """
-
-        for group in self.groups:
-            if user.id in group.user_list:
-                return group
-
-        # The only way I could search for roles is if I add a `server=None` param and pass that too
-        if type(user) == discord.User:
-            return self.default_group
-
-        # We loop again so that we don't return a role based group before we find an assigned one
-        for group in self.groups:
-            for role in user.roles:
-                if role.id in group.granted_to_roles:
-                    return group
-
-        return self.default_group
-
-    def create_group(self, name, **kwargs):
-        self.config.read_dict({name:kwargs})
-        self.groups.add(PermissionGroup(name, self.config[name]))
-        # TODO: Test this
+; DON'T OPEN THIS FILE WITH NOTEPAD.  If you don't have a preferred text editor, use notepad++ or any other modern text editor.
+;
+; If you edit this file, Save-As permissions.ini
+;
+;
+; Basics:
+; - Semicolons are comment characters, any line that starts with one is ignored.
+; - Sections headers are permissions groups, they're the lines that have a word in [Brackets].  You can add more for more permissions groups.
+; - Options with a semicolon before them will be ignored.
+; - Add whatever permissions you want, but always have at least one.
+; - Never have an options without a value, i.e. "CommandBlacklist = "
+; - [Default] is a special section.  Any user that doesn't get assigned to a group via role or UserList gets assigned to this group.
+;
+;
+; Option info:
+;
+;    [Groupname]
+;    This is the section header.  The word is the name of the group, just name it something appropriate for its permissions.
+;
+;    CommandWhitelist = command1 command2
+;    List of commands users are allowed to use, separated by spaces.  Don't include the prefix, i.e. !  Overrides CommandBlacklist if set.
+;
+;    CommandBlacklist = command1 command2
+;    List if commands users are not allowed to use.  You don't need to use both
+;    whitelist and blacklist since blacklist gets overridden.  Just pick one.
+;
+;    IgnoreNonVoice = command1 command2
+;    List of commands that the user is required to be in the same voice channel as the bot to use.
+;    For example, if you don't want the user to be able to voteskip songs while not in the voice channel, add skip to this option.
+;
+;    GrantToRoles = 111222333444555 999888777000111
+;    List of ids to automatically grant this group to.  To get the id of a role, use the listids command.
+;
+;    UserList = 21343341324 321432413214321
+;    List of user ids to grant this group to.  This option overrides the role granted by the GrantToRoles option.
+;
+;    MaxSongLength = 600
+;    Maximum length of a song in seconds.  Note: This won't always work if the song data doesn't have duration listed.
+;    This doesn't happen often, but youtube, soundcloud, etc work fine though.  This will be fixed in a future update.
+;    A value of 0 means unlimited.
+;
+;    MaxSongs = 5
+;    Maximum number of songs a user is allowed to queue. A value of 0 means unlimited.
+;
+;    MaxPlaylistLength = 10
+;    Maximum number of songs a playlist is allowed to have to be queued. A value of 0 means unlimited.
+;
+;    AllowPlaylists = yes
+;    Whether or not the user is allowed to queue entire playlists.
+;
+;    InstaSkip = no
+;    Allows the user to skip a song without having to vote, like the owner.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
-class PermissionGroup:
-    def __init__(self, name, section_data):
-        self.name = name
+; I've set some example groups, these should be fine.  Just add your roles or users and you should be good to go.
 
-        self.command_whitelist = section_data.get('CommandWhiteList', fallback=PermissionsDefaults.CommandWhiteList)
-        self.command_blacklist = section_data.get('CommandBlackList', fallback=PermissionsDefaults.CommandBlackList)
-        self.ignore_non_voice = section_data.get('IgnoreNonVoice', fallback=PermissionsDefaults.IgnoreNonVoice)
-        self.granted_to_roles = section_data.get('GrantToRoles', fallback=PermissionsDefaults.GrantToRoles)
-        self.user_list = section_data.get('UserList', fallback=PermissionsDefaults.UserList)
+;;;;;;;;;;;;;;;;;;;
+;
+;  AND HEY.
+;  Before you ask any dumb "how do I do this" questions in the help server, you should probably read that big comment I put time
+;  into writing for this exact purpose.  It tells you how to use every option.  Your question is probably answered there.
+;
+;;;;;;;;;;;;;;;;;;;
 
-        self.max_songs = section_data.get('MaxSongs', fallback=PermissionsDefaults.MaxSongs)
-        self.max_song_length = section_data.get('MaxSongLength', fallback=PermissionsDefaults.MaxSongLength)
-        self.max_playlist_length = section_data.get('MaxPlaylistLength', fallback=PermissionsDefaults.MaxPlaylistLength)
+; This is the fallback group for any users that don't get assigned to another group.  Don't remove/rename this group.
+; You cannot assign users or roles to this group.  Those options are ignored.
+[Default]
+CommandWhitelist = play perms queue np skip search id help clean
+; CommandBlacklist =
+IgnoreNonVoice = play skip search
+MaxSongLength = 1200
+MaxSongs = 0
+AllowPlaylists = yes
+; MaxPlaylistLength = 20
+InstaSkip = no
 
-        self.allow_playlists = section_data.get('AllowPlaylists', fallback=PermissionsDefaults.AllowPlaylists)
-        self.instaskip = section_data.get('InstaSkip', fallback=PermissionsDefaults.InstaSkip)
+; This group has full permissions.
+[MusicMaster]
+GrantToRoles = 393569021804675086
+; UserList =
+MaxSongLength = 0
+MaxSongs = 0
+MaxPlaylistLength = 0
+AllowPlaylists = yes
+InstaSkip = yes
 
-        self.validate()
+; This group can't use the blacklist and listids commands, but otherwise has full permissions.
+[DJ]
+CommandBlacklist = blacklist listids
+; GrantToRoles =
+; UserList =
+MaxSongLength = 0
+MaxSongs = 0
+MaxPlaylistLength = 0
+AllowPlaylists = yes
+InstaSkip = yes
 
-    def validate(self):
-        if self.command_whitelist:
-            self.command_whitelist = set(self.command_whitelist.lower().split())
-
-        if self.command_blacklist:
-            self.command_blacklist = set(self.command_blacklist.lower().split())
-
-        if self.ignore_non_voice:
-            self.ignore_non_voice = set(self.ignore_non_voice.lower().split())
-
-        if self.granted_to_roles:
-            self.granted_to_roles = set(self.granted_to_roles.split())
-
-        if self.user_list:
-            self.user_list = set(self.user_list.split())
-
-        try:
-            self.max_songs = max(0, int(self.max_songs))
-        except:
-            self.max_songs = PermissionsDefaults.MaxSongs
-
-        try:
-            self.max_song_length = max(0, int(self.max_song_length))
-        except:
-            self.max_song_length = PermissionsDefaults.MaxSongLength
-
-        try:
-            self.max_playlist_length = max(0, int(self.max_playlist_length))
-        except:
-            self.max_playlist_length = PermissionsDefaults.MaxPlaylistLength
-
-        self.allow_playlists = configparser.RawConfigParser.BOOLEAN_STATES.get(
-            self.allow_playlists, PermissionsDefaults.AllowPlaylists
-        )
-
-        self.instaskip = configparser.RawConfigParser.BOOLEAN_STATES.get(
-            self.instaskip, PermissionsDefaults.InstaSkip
-        )
-
-    @staticmethod
-    def _process_list(seq, *, split=' ', lower=True, strip=', ', coerce=str, rcoerce=list):
-        lower = str.lower if lower else None
-        _strip = (lambda x: x.strip(strip)) if strip else None
-        coerce = coerce if callable(coerce) else None
-        rcoerce = rcoerce if callable(rcoerce) else None
-
-        for ch in strip:
-            seq = seq.replace(ch, split)
-
-        values = [i for i in seq.split(split) if i]
-        for fn in (_strip, lower, coerce):
-            if fn: values = map(fn, values)
-
-        return rcoerce(values)
-
-    def add_user(self, uid):
-        self.user_list.add(uid)
-
-    def remove_user(self, uid):
-        if uid in self.user_list:
-            self.user_list.remove(uid)
-
-
-    def __repr__(self):
-        return "<PermissionGroup: %s>" % self.name
-
-    def __str__(self):
-        return "<PermissionGroup: %s: %s>" % (self.name, self.__dict__)
+; This group can only use the listed commands, can only use play/skip when in the bot's voice channel,
+; can't request songs longer than 3 and a half minutes, and can only request a maximum of 8 songs at a time.
+[Limited]
+CommandWhitelist = play queue np perms help skip
+; CommandBlacklist =
+IgnoreNonVoice = play skip
+; GrantToRoles =
+MaxSongLength = 210
+MaxSongs = 8
+AllowPlaylists = yes
+InstaSkip = no
